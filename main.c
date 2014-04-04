@@ -21,11 +21,11 @@
 
 
 #define TMR0_DATA 20
-#define BT_START
-#define BT_PAUSE
+
+/* @BUTTON symbols */
 
 #define BT_STOP   0x0001    //
-#define BT_B0     0x0002    //
+#define BT_ESC    0x0002    //
 #define BT_DP     0x0004    //
 #define BT_ENT    0x0008
 
@@ -39,7 +39,6 @@
 #define BT_B5     0x0400    //
 #define BT_B6     0x0800    //
 
-//#define BT_START  0x0100    //
 #define BT_B7     0x2000    //
 #define BT_B8     0x4000    //
 #define BT_B9     0x8000    //
@@ -52,6 +51,11 @@
 #define INITIATOR_COUNT PORTCbits.RC6 // Initiator count term 22
 #define START         PORTCbits.RC5   // Start (remote) term 4
 
+#define RED_SIGNAL    PORTAbits.RA4   // red signal LED on the button board.
+#define GREEN_SIGNAL  PORTAbits.RA3   // green signal LED on the button board.
+#define YEL_SIGNAL    PORTAbits.RA2   // yellow signal LED on the button PCB.
+#define TIMER_2_PRESET 100
+
 /******************************************************************************/
 /* General interrupt handler for treats the timer, and counter interrupts     */
 /******************************************************************************/
@@ -61,15 +65,56 @@ int TMR0_COUNTER;
 unsigned int TEST_BT_STATES;
 /* @BT_STATES: button states. */
 unsigned int BT_STATES;
+/* @BT_FALL_EDGES: falling edges indicating of buttons. */
 unsigned int BT_FALL_EDGES;
+/* @BT_RISE_EDGES: rising edges indicating of buttons. */
 unsigned int BT_RISE_EDGES;
 /* row selector for button reading. */
 unsigned char row_selector = 0b00000001;
+/* Row counter for for cycle. */
 int row_counter = 0;
+
+unsigned char PRESET_DATA = TIMER_2_PRESET;
+
+int desired_count;
+
+int actual_count;
+
+int desired_counter_start;
+
+unsigned char PROGRAM_STATE = 1;  // Program state
+
+void ClearEvents()
+{
+  BT_FALL_EDGES = 0;
+};
+
+void SetProgramState(int newState)
+{
+  switch (newState)
+  {
+    case 1:
+      RED_SIGNAL = 0;
+      GREEN_SIGNAL = 1;
+      YEL_SIGNAL = 1;
+      break;
+    case 2:
+      RED_SIGNAL = 1;
+      GREEN_SIGNAL = 0;
+      YEL_SIGNAL = 1;
+      break;
+    case 3:
+      RED_SIGNAL = 1;
+      GREEN_SIGNAL = 1;
+      YEL_SIGNAL = 0;
+      break;
+  }
+  PROGRAM_STATE = newState;
+}
 
 void interrupt isr(void)
 {
-  if (INTCONbits.T0IF)/* */
+  if (INTCONbits.T0IF)/* T0 timer interrupt. */
   {
   row_selector = 0x01;
   TEST_BT_STATES = 0;
@@ -77,12 +122,11 @@ void interrupt isr(void)
   for (row_counter = 0; row_counter < 4; row_counter++)
   {
     PORTC &= 0xF0;
-    // select the next row.
-//    PORTC |= (~row_selector) & 0x0F;
+    /* Select the next row to pull down the C port row selector pin. */
     PORTC |= (~row_selector) & 0x0F;
-    // make the BT_STATES from PORTB inputs.
+    /* Get the B port button status, then make the TEST_BT_STATES integer. */
     TEST_BT_STATES |= ((~PORTB) & 0x0F) << (row_counter * 4);
-    // select the next row.
+    /* Select the next row with shifting the row_selector. */
     row_selector <<= 1;
   }
 
@@ -91,23 +135,31 @@ void interrupt isr(void)
   BT_FALL_EDGES = (TEST_BT_STATES ^ BT_STATES) & BT_STATES;
 
   BT_STATES = TEST_BT_STATES;
-
-    if (PORTAbits.RA5)
-    {
-//      PORTAbits.RA5 = 0;
-    }
-    else 
-    {
-//      PORTAbits.RA5 = 1;
-    }
+  
     TMR0 = TMR0_DATA;
     INTCONbits.T0IF = 0;  // Reset interrupt flag.
-  }
+  }else
+    if (PIR1bits.TMR2IF)
+    {
+
+      if (!RED_SIGNAL)
+      {
+//        RED_SIGNAL = 1;
+//        INITIATOR_COUNT = 1;
+      } else
+      {
+//        RED_SIGNAL = 0;
+//        INITIATOR_COUNT = 0;
+      }
+
+      PIR1bits.TMR2IF = 0;
+    };
+
 }
 
-void wait()
+void wait(int wt)
 { int i;
-  for (i = 0; i< 8000; i++)
+  for (i = 0; i< wt; i++)
   {
   }
 }
@@ -117,6 +169,7 @@ void wait()
  */
 int main(int, char**) {
 
+  int counterdown;
   /* Initialize time base. */
 
   OPTION_REGbits.T0CS = 0b00; /* TMR0 Clock Source Select bit
@@ -126,11 +179,17 @@ int main(int, char**) {
   OPTION_REGbits.PS = 0b111;  /*
                                *                   */
 
-  ADCON1bits.PCFG = 0b0101; // D D D D VREF+ D A A RA3 VSS 2/1
+  ADCON1bits.PCFG = 0b0111;
 
   TRISAbits.TRISA5 = 0;     //
-
+  TRISAbits.TRISA4 = 0;
+  TRISAbits.TRISA3 = 0;
+  TRISAbits.TRISA2 = 0;
+  PORTA = 0;
+  
   TRISC = 0b00000000;     // RC 0-7 all outputs
+  PORTC = 0;
+
   OPTION_REGbits.nRBPU = 0; //
 
   TMR0 = TMR0_DATA;
@@ -138,48 +197,125 @@ int main(int, char**) {
   INTCONbits.T0IF = 0;
 
   INTCONbits.T0IE = 1;        // Enable T0 interrupt.
+
+
+  PR2 = TIMER_2_PRESET;
+  T2CONbits.T2CKPS = 0b11;
+  T2CONbits.TOUTPS = 0b1111;
+
+  PIR1bits.TMR2IF = 0;
+  PIE1bits.TMR2IE = 1;
+  T2CONbits.TMR2ON = 1;
+
+  INTCONbits.PEIE = 1;        // peripherial interrupt enable.
   INTCONbits.GIE = 1;         // Enable global interrupt
+
+  SetProgramState(1);
 
   while (1)
   {
-    if (BT_FALL_EDGES & BT_START)
+
+    switch (PROGRAM_STATE)
     {
-      if (PORTCbits.RC4)
-      PORTCbits.RC4 = 0;
-      else
-      PORTCbits.RC4 = 1;
-      /* Clear the button event. */
-      BT_FALL_EDGES &= ~BT_START;
+      /* Program state = ruuning test. */
+      case 1:
+        if (BT_FALL_EDGES & BT_ESC) ClearEvents();
+        if (BT_FALL_EDGES & BT_ENT)
+        {
+          ClearEvents();
+          SetProgramState(2);
+        };
+        break;
+      /* Program state = I/O test.*/
+      case 2:
+        if (BT_FALL_EDGES & BT_ESC)
+        {
+          ClearEvents();
+          SetProgramState(1);
+        }
+          else if (BT_FALL_EDGES & BT_ENT)
+          {
+            ClearEvents();
+            SetProgramState(3);
+          };
+        break;
+      /* Program state = Options.*/
+      case 3: 
+        if (BT_FALL_EDGES & BT_ESC)
+        {
+          ClearEvents();
+          SetProgramState(2);
+        };
+        break;
+    }
+
+
+
+/*    if (BT_FALL_EDGES & BT_ESC)
+    {
+      for (counterdown = 0; counterdown < 128; counterdown++)
+      {
+        INITIATOR_COUNT = 1;
+        wait(2000);
+        INITIATOR_COUNT = 0;
+        wait(2000);
+      }
+      BT_FALL_EDGES &= ~BT_ESC;
     };
 
-    if (BT_FALL_EDGES & BT_B7)
+    if (BT_FALL_EDGES & BT_DP)
     {
-      if (PORTCbits.RC5)
-      PORTCbits.RC5 = 0;
+
+      if  (!SLACK_B_DOWN)
+      {
+        SLACK_B_DOWN = 1;
+      }
       else
-      PORTCbits.RC5 = 1;
-      /* Clear the button event. */
-      BT_FALL_EDGES &= ~BT_B7;
+      {
+        SLACK_B_DOWN = 0;
+      }
+      BT_FALL_EDGES &= ~BT_DP;
     };
 
+    if (BT_FALL_EDGES & BT_ENT)
+    {
+
+      if  (!START)
+      {
+        START = 1;
+      }
+      else
+      {
+        START = 0;
+      }
+      BT_FALL_EDGES &= ~BT_ENT;
+    };
+
+    if (BT_FALL_EDGES & BT_B1)
+    {
+      desired_count = 30;
+      desired_counter_start = 1;
+      BT_FALL_EDGES &= ~BT_B1;
+
+    };*/
+
+/*  Increnementing, and decrementing the counting speed. */
+/*    if (BT_FALL_EDGES & BT_B2)
+    {
+      PRESET_DATA += 20;
+      if (PRESET_DATA > 239) { PRESET_DATA = 220; };
+      PR2 = PRESET_DATA;
+      BT_FALL_EDGES &= ~BT_B2;
+    };
     if (BT_FALL_EDGES & BT_B8)
     {
-      if (PORTCbits.RC6)
-      PORTCbits.RC6 = 0;
-      else
-      PORTCbits.RC6 = 1;
-      /* Clear the button event. */
+      PRESET_DATA -= 20;
+      if (PRESET_DATA < 61) {PRESET_DATA = 60; };
+      PR2 = PRESET_DATA;
       BT_FALL_EDGES &= ~BT_B8;
-    };
-    if (BT_FALL_EDGES & BT_B9)
-    {
-      if (PORTCbits.RC7)
-      PORTCbits.RC7 = 0;
-      else
-      PORTCbits.RC7 = 1;
-      /* Clear the button event. */
-      BT_FALL_EDGES &= ~BT_B9;
-    };
+    };*/
+
+    
 
   }
   return (EXIT_SUCCESS);
