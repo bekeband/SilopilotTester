@@ -56,6 +56,20 @@
 #define YEL_SIGNAL    PORTAbits.RA2   // yellow signal LED on the button PCB.
 #define TIMER_2_PRESET 100
 
+#define ASCDESC_WT_TIME 20
+#define ST_WT_TIME 40
+#define ST_HOLD_TIME 80
+#define MAX_BASE_COUNT  128
+#define TEST_COUNT 75
+
+typedef union  {
+  struct {
+    unsigned PR_START: 1;
+    unsigned COUNT_STATE: 1;
+    unsigned END_TEST: 1;
+  };
+} U_TEST_STATE;
+
 /******************************************************************************/
 /* General interrupt handler for treats the timer, and counter interrupts     */
 /******************************************************************************/
@@ -76,13 +90,33 @@ int row_counter = 0;
 
 unsigned char PRESET_DATA = TIMER_2_PRESET;
 
-int desired_count;
+int desired_count = (MAX_BASE_COUNT + 1);
+int meas_count = (TEST_COUNT);
+
 
 int actual_count;
 
 int desired_counter_start;
+int time_counter;
+int time_post_counter;
 
 unsigned char PROGRAM_STATE = 1;  // Program state
+
+U_TEST_STATE TEST_STATE;
+
+/* void ClearOuts() clear all outputs for program state change.*/
+
+void ClearOuts()
+{
+  SLACK_B_DOWN = SLACK_B_UP = INITIATOR_END = INITIATOR_COUNT = START = 0;
+}
+
+void ResetProgram()
+{
+  ClearOuts();
+  time_counter = 0;
+  actual_count = 0;
+}
 
 void ClearEvents()
 {
@@ -91,18 +125,22 @@ void ClearEvents()
 
 void SetProgramState(int newState)
 {
+  ClearOuts();
   switch (newState)
   {
+    /* Normal test state. */
     case 1:
       RED_SIGNAL = 0;
       GREEN_SIGNAL = 1;
       YEL_SIGNAL = 1;
       break;
+   /* Setup state: */
     case 2:
       RED_SIGNAL = 1;
       GREEN_SIGNAL = 0;
       YEL_SIGNAL = 1;
       break;
+    /* Setup timer state. */
     case 3:
       RED_SIGNAL = 1;
       GREEN_SIGNAL = 1;
@@ -142,16 +180,68 @@ void interrupt isr(void)
     if (PIR1bits.TMR2IF)
     {
 
-      if (!RED_SIGNAL)
+      if (TEST_STATE.PR_START)
       {
-//        RED_SIGNAL = 1;
+        /* Indicator blinking always. */
+        if (!RED_SIGNAL)
+        {
+          RED_SIGNAL = 1;
 //        INITIATOR_COUNT = 1;
-      } else
-      {
-//        RED_SIGNAL = 0;
+        } else
+        {
+          RED_SIGNAL = 0;
 //        INITIATOR_COUNT = 0;
-      }
+        }
+        time_counter++;
+        
+        if (time_counter == ASCDESC_WT_TIME)
+        {
+          SLACK_B_DOWN = 1;
+        };
 
+        if (time_counter == ST_WT_TIME)
+        {
+          START = 1;
+          TEST_STATE.COUNT_STATE = 1;
+        };
+
+        if ((time_counter > ST_HOLD_TIME) && (TEST_STATE.COUNT_STATE))
+        {
+          if (time_counter & 0x01)
+          {
+            INITIATOR_COUNT = 1;
+          } else
+          {
+            actual_count++;
+            if (actual_count == desired_count)
+            {
+              /* end of counting. */
+              TEST_STATE.COUNT_STATE = 0;
+              TEST_STATE.END_TEST = 1;
+            }
+            if (actual_count == meas_count)
+            {
+              INITIATOR_END = 1;
+              SLACK_B_DOWN = 0;
+              SLACK_B_UP = 1;
+            }
+            if (actual_count == meas_count + 5)
+            {
+              SLACK_B_DOWN = 1;
+              SLACK_B_UP = 0;
+            }
+            INITIATOR_COUNT = 0;
+          }
+        }
+        if (TEST_STATE.END_TEST)
+        {
+          ClearOuts();
+          time_counter = 0;
+          actual_count = 0;
+          TEST_STATE.END_TEST = 0;
+        }
+        
+      }
       PIR1bits.TMR2IF = 0;
     };
 
@@ -217,17 +307,112 @@ int main(int, char**) {
 
     switch (PROGRAM_STATE)
     {
-      /* Program state = ruuning test. */
+      /* Program state = running test. */
       case 1:
+
+    if (BT_FALL_EDGES & BT_B1)
+    {
+      if (!TEST_STATE.PR_START)
+      {
+        ResetProgram();
+        TEST_STATE.PR_START = 1;
+      } else
+      {
+        SetProgramState(1);
+        TEST_STATE.PR_START = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B1;
+    };
+
+/* ------------------- Reset the program state --------------------------- */
+        
         if (BT_FALL_EDGES & BT_ESC) ClearEvents();
         if (BT_FALL_EDGES & BT_ENT)
         {
+          TEST_STATE.PR_START = 0;
           ClearEvents();
           SetProgramState(2);
         };
+
+/* ---------------------------------------------------------------------- */
         break;
       /* Program state = I/O test.*/
       case 2:
+
+/* Task for I/O reset program state. */
+
+    if (BT_FALL_EDGES & BT_B1)
+    {
+      /* Teste the slack down */
+      if  (!SLACK_B_DOWN)
+      {
+        SLACK_B_DOWN = 1;
+      }
+      else
+      {
+        SLACK_B_DOWN = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B1;
+    };
+
+    if (BT_FALL_EDGES & BT_B2)
+    {
+      /* Test start signal. */
+      if  (!SLACK_B_UP)
+      {
+        SLACK_B_UP = 1;
+      }
+      else
+      {
+        SLACK_B_UP = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B2;
+    };
+
+    if (BT_FALL_EDGES & BT_B3)
+    {
+      /* Test start signal. */
+      if  (!START)
+      {
+        START = 1;
+      }
+      else
+      {
+        START = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B3;
+    };
+
+    if (BT_FALL_EDGES & BT_B4)
+    {
+      /* Test start signal. */
+      if  (!INITIATOR_COUNT)
+      {
+        INITIATOR_COUNT = 1;
+      }
+      else
+      {
+        INITIATOR_COUNT = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B4;
+    };
+
+    if (BT_FALL_EDGES & BT_B5)
+    {
+      /* Test start signal. */
+      if  (!INITIATOR_END)
+      {
+        INITIATOR_END = 1;
+      }
+      else
+      {
+        INITIATOR_END = 0;
+      }
+      BT_FALL_EDGES &= ~BT_B5;
+    };
+
+/* ------------------- Reset the program state --------------------------- */
+
         if (BT_FALL_EDGES & BT_ESC)
         {
           ClearEvents();
@@ -238,6 +423,7 @@ int main(int, char**) {
             ClearEvents();
             SetProgramState(3);
           };
+/* ---------------------------------------------------------------------- */
         break;
       /* Program state = Options.*/
       case 3: 
