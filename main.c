@@ -59,7 +59,8 @@
 #define ASCDESC_WT_TIME 20
 #define ST_WT_TIME 40
 #define ST_HOLD_TIME 80
-#define MAX_BASE_COUNT  128
+#define ST_IE_TIME 120
+#define MAX_BASE_COUNT  129
 #define TEST_COUNT 75
 
 typedef union  {
@@ -96,7 +97,6 @@ int meas_count = (TEST_COUNT);
 
 int actual_count;
 
-int desired_counter_start;
 int time_counter;
 int time_post_counter;
 
@@ -193,21 +193,32 @@ void interrupt isr(void)
 //        INITIATOR_COUNT = 0;
         }
         time_counter++;
-        
+
+        /* SLACK BAND SWITCH ON TIME. */
+
         if (time_counter == ASCDESC_WT_TIME)
         {
           SLACK_B_DOWN = 1;
         };
 
+        /* START SIGNAL WAITING ON TIME. */
         if (time_counter == ST_WT_TIME)
         {
           START = 1;
-          TEST_STATE.COUNT_STATE = 1;
+
         };
+        /* Initiator end stop must on within certainly time. */
+        if (time_counter == ST_IE_TIME)
+        {
+          INITIATOR_END = 1;
+          TEST_STATE.COUNT_STATE = 1;
+        }
+
+        /* Start OK, the may going the counting.*/
 
         if ((time_counter > ST_HOLD_TIME) && (TEST_STATE.COUNT_STATE))
         {
-          if (time_counter & 0x01)
+          if (time_counter & 0x02)
           {
             INITIATOR_COUNT = 1;
           } else
@@ -216,30 +227,30 @@ void interrupt isr(void)
             if (actual_count == desired_count)
             {
               /* end of counting. */
-              TEST_STATE.COUNT_STATE = 0;
-              TEST_STATE.END_TEST = 1;
+//              TEST_STATE.COUNT_STATE = 0;
+//              TEST_STATE.END_TEST = 1;
             }
             if (actual_count == meas_count)
             {
-              INITIATOR_END = 1;
-              SLACK_B_DOWN = 0;
-              SLACK_B_UP = 1;
+//              INITIATOR_END = 1;
+//              SLACK_B_DOWN = 0;
+//              SLACK_B_UP = 1;
             }
             if (actual_count == meas_count + 5)
             {
-              SLACK_B_DOWN = 1;
-              SLACK_B_UP = 0;
+//              SLACK_B_DOWN = 1;
+//              SLACK_B_UP = 0;
             }
             INITIATOR_COUNT = 0;
           }
         }
-        if (TEST_STATE.END_TEST)
+/*        if (TEST_STATE.END_TEST)
         {
           ClearOuts();
           time_counter = 0;
           actual_count = 0;
           TEST_STATE.END_TEST = 0;
-        }
+        }*/
         
       }
       PIR1bits.TMR2IF = 0;
