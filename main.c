@@ -54,12 +54,17 @@
 #define RED_SIGNAL    PORTAbits.RA4   // red signal LED on the button board.
 #define GREEN_SIGNAL  PORTAbits.RA3   // green signal LED on the button board.
 #define YEL_SIGNAL    PORTAbits.RA2   // yellow signal LED on the button PCB.
+
+#define COUNT_SIGNAL    PORTBbits.RB5   // K 101 relay signal.
+
+#define COUNT_ERROR 45
+
 #define TIMER_2_PRESET 100
 
 #define ASCDESC_WT_TIME 20
 #define ST_WT_TIME 40
-#define ST_HOLD_TIME 80
-#define ST_IE_TIME 120
+#define ST_HOLD_TIME 90
+#define ST_IE_TIME 80
 #define MAX_BASE_COUNT  129
 #define TEST_COUNT 75
 
@@ -67,7 +72,15 @@ typedef union  {
   struct {
     unsigned PR_START: 1;
     unsigned COUNT_STATE: 1;
+    unsigned COUNT_PHASE0: 1;
+    unsigned COUNT_PHASE1: 1;
+    unsigned COUNT_PHASE2: 1;
+    unsigned COUNT_PHASE3: 1;
+    unsigned TEST_ERROR: 1;
     unsigned END_TEST: 1;
+    struct {
+        unsigned BT: 8;
+    };
   };
 } U_TEST_STATE;
 
@@ -96,7 +109,7 @@ int meas_count = (TEST_COUNT);
 
 
 int actual_count;
-
+int test_error_code;
 int time_counter;
 int time_post_counter;
 
@@ -116,6 +129,8 @@ void ResetProgram()
   ClearOuts();
   time_counter = 0;
   actual_count = 0;
+  TEST_STATE.BT = 0;
+  YEL_SIGNAL = 0;
 }
 
 void ClearEvents()
@@ -212,50 +227,52 @@ void interrupt isr(void)
         {
           INITIATOR_END = 1;
           TEST_STATE.COUNT_STATE = 1;
+          TEST_STATE.COUNT_PHASE3 = 1;
         }
 
-        /* Start OK, the may going the counting.*/
+        /**/
 
         if ((time_counter > ST_HOLD_TIME) && (TEST_STATE.COUNT_STATE))
         {
-          if (time_counter & 0x02)
-          {
-            INITIATOR_COUNT = 1;
-          } else
-          {
-            actual_count++;
-            if (actual_count == desired_count)
+          if (TEST_STATE.COUNT_PHASE3)
             {
-              /* end of counting. */
-//              TEST_STATE.COUNT_STATE = 0;
-//              TEST_STATE.END_TEST = 1;
-            }
-            if (actual_count == meas_count)
+              TEST_STATE.COUNT_PHASE3 = 0;
+              TEST_STATE.COUNT_PHASE0 = 1;
+              INITIATOR_COUNT = 1;
+            } else
+          if (TEST_STATE.COUNT_PHASE0)
             {
-//              INITIATOR_END = 1;
-//              SLACK_B_DOWN = 0;
-//              SLACK_B_UP = 1;
-            }
-            if (actual_count == meas_count + 5)
+              TEST_STATE.COUNT_PHASE0 = 0;
+              TEST_STATE.COUNT_PHASE1 = 1;
+              /* if no count signal input... */
+              if (!COUNT_SIGNAL)
+              {
+                  TEST_STATE.COUNT_STATE = 0;
+                  TEST_STATE.TEST_ERROR = 1;
+                  test_error_code = COUNT_ERROR;
+              }
+            } else
+          if (TEST_STATE.COUNT_PHASE1)
             {
-//              SLACK_B_DOWN = 1;
-//              SLACK_B_UP = 0;
-            }
-            INITIATOR_COUNT = 0;
-          }
+              TEST_STATE.COUNT_PHASE1 = 0;
+              TEST_STATE.COUNT_PHASE2 = 1;
+              INITIATOR_COUNT = 0;
+            } else
+          if (TEST_STATE.COUNT_PHASE2)
+            {
+              TEST_STATE.COUNT_PHASE2 = 0;
+              TEST_STATE.COUNT_PHASE3 = 1;
+              if (COUNT_SIGNAL)
+              {
+                  TEST_STATE.COUNT_STATE = 0;
+                  TEST_STATE.TEST_ERROR = 1;
+                  test_error_code = COUNT_ERROR;
+              }
+            };
         }
-/*        if (TEST_STATE.END_TEST)
-        {
-          ClearOuts();
-          time_counter = 0;
-          actual_count = 0;
-          TEST_STATE.END_TEST = 0;
-        }*/
-        
       }
       PIR1bits.TMR2IF = 0;
     };
-
 }
 
 void wait(int wt)
@@ -335,6 +352,12 @@ int main(int, char**) {
       BT_FALL_EDGES &= ~BT_B1;
     };
 
+/*    if (TEST_STATE.TEST_ERROR)
+    {
+        ResetProgram();
+//        YEL_SIGNAL = 1;
+    }*/
+
 /* ------------------- Reset the program state --------------------------- */
         
         if (BT_FALL_EDGES & BT_ESC) ClearEvents();
@@ -368,7 +391,6 @@ int main(int, char**) {
 
     if (BT_FALL_EDGES & BT_B2)
     {
-      /* Test start signal. */
       if  (!SLACK_B_UP)
       {
         SLACK_B_UP = 1;
@@ -382,7 +404,6 @@ int main(int, char**) {
 
     if (BT_FALL_EDGES & BT_B3)
     {
-      /* Test start signal. */
       if  (!START)
       {
         START = 1;
@@ -396,7 +417,6 @@ int main(int, char**) {
 
     if (BT_FALL_EDGES & BT_B4)
     {
-      /* Test start signal. */
       if  (!INITIATOR_COUNT)
       {
         INITIATOR_COUNT = 1;
